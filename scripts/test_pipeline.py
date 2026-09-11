@@ -77,4 +77,37 @@ class PipelineTests(unittest.TestCase):
   r=self.run_cli('validate','--work',self.work,'--partial');self.assertIn('remaining',r.stdout)
   d=json.loads(files[0].read_text());d['items'][0]['id']='wrong';files[0].write_text(json.dumps(d))
   self.assertIn('unknown',self.run_cli('validate','--work',self.work,'--partial',ok=False).stderr)
+ def test_hierarchy_and_heading_kept_with_body(self):
+  import slide_translate as pipeline
+  pipeline.choose_font(None, '标题正文图注•')
+  entries=[{'zh':t,'role':r,'status':'translated'} for t,r in [('标题','title'),('标题','heading'),('正文','body'),('正文','bullet'),('图注','caption'),('图注','footnote')]]
+  paras=pipeline.page_paragraphs({}, {'items':entries,'notes':[],'unreviewed':False})
+  self.assertGreater(paras[0].style.fontSize,paras[1].style.fontSize)
+  self.assertGreater(paras[1].style.fontSize,paras[2].style.fontSize)
+  self.assertGreater(paras[2].style.fontSize,paras[4].style.fontSize)
+  self.assertGreater(paras[3].style.leftIndent,0)
+  pages=pipeline.paginate([paras[2],paras[1],paras[2]],432,75)
+  self.assertEqual(len(pages[0]),1, 'Heading must move with following body')
+  self.assertEqual(len(pages[1]),2)
+ def test_invalid_role_rejected(self):
+  self.prepare();self.fill();f=next((self.work/'responses').glob('*.json'));d=json.loads(f.read_text());d['items'][0]['role']='invented';f.write_text(json.dumps(d))
+  self.assertIn('role',self.run_cli('validate','--work',self.work,ok=False).stderr)
+ def test_table_export_repeats_header_and_preserves_rows(self):
+  self.prepare();self.fill()
+  for f in (self.work/'responses').glob('*.json'):
+   d=json.loads(f.read_text());first=d['items'][0]
+   first.update(role='table',rows=[['项目','数值']]+[[f'指标{n}',f'{n} mg'] for n in range(70)],header_rows=1)
+   for e in d['items'][1:]:e['table_ref']=first['id']
+   f.write_text(json.dumps(d))
+  out=self.root/'table.pdf';self.run_cli('build','--work',self.work,'--output',out)
+  pdf=PdfReader(out);self.assertGreater(len(pdf.pages),3)
+  self.assertTrue(all('项目' in p.extract_text() for p in pdf.pages))
+  text=''.join(p.extract_text() for p in pdf.pages)
+  self.assertEqual(text.count('指标69'),3)
+ def test_table_rejects_ragged_rows_and_bad_reference(self):
+  self.prepare();self.fill();f=next((self.work/'responses').glob('*.json'));d=json.loads(f.read_text());e=d['items'][0]
+  e.update(role='table',rows=[['标题','值'],['缺列']],header_rows=1);f.write_text(json.dumps(d))
+  self.assertIn('rectangular',self.run_cli('validate','--work',self.work,ok=False).stderr)
+  e.update(role='body',table_ref='missing');f.write_text(json.dumps(d))
+  self.assertIn('table_ref',self.run_cli('validate','--work',self.work,ok=False).stderr)
 if __name__=='__main__':unittest.main()
