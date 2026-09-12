@@ -22,7 +22,7 @@ class PipelineTests(unittest.TestCase):
   return json.loads((self.work/'manifest.json').read_text())
  def fill(self,long=False):
   for req in sorted((self.work/'requests').glob('*.json')):
-   q=json.loads(req.read_text());a={'document_id':q['document_id'],'chunk_id':q['chunk_id'],'visual_review':'reviewed','figure_notes':[], 'items':[{'id':b['id'],'zh':('中文长段落，需要自动续页。'*450 if long else '中文译文：剂量 0.5 mg。'),'status':'translated'} for b in q['items']]}
+   q=json.loads(req.read_text());a={'document_id':q['document_id'],'chunk_id':q['chunk_id'],'visual_review':'reviewed','figure_notes':[], 'items':[{'id':b['id'],'zh':('中文长段落，需要自动续页。'*450 if long else '中文译文：剂量 0.5 mg。'),'status':'translated','role':'body'} for b in q['items']]}
    (self.work/'responses'/req.name).write_text(json.dumps(a,ensure_ascii=False))
  def test_prepare_ids_and_duplicate_footer(self):
   m=self.prepare();self.assertEqual(len(m['pages']),3);self.assertEqual([p['page'] for p in m['pages']],[1,2,3]);self.assertEqual([p['printed_label'] for p in m['pages']],['22']*3)
@@ -60,7 +60,7 @@ class PipelineTests(unittest.TestCase):
   pixel=Img.open(self.work/m['pages'][0]['image']).getpixel((30,30));self.assertGreater(pixel[2],pixel[0])
   self.fill();self.assertIn('image-only',self.run_cli('validate','--work',self.work,ok=False).stderr)
   for f in (self.work/'responses').glob('*.json'):
-   d=json.loads(f.read_text());d['figure_notes']=[{'source':'原图','zh':'本页仅有纯色图像，无可译文字。','status':'translated'}];f.write_text(json.dumps(d))
+   d=json.loads(f.read_text());d['figure_notes']=[{'source':'原图','zh':'本页仅有纯色图像，无可译文字。','status':'translated','role':'caption'}];f.write_text(json.dumps(d))
   self.run_cli('build','--work',self.work,'--output',self.root/'images.pdf')
   self.assertEqual(len(PdfReader(self.root/'images.pdf').pages),2)
  def test_external_pdf_adapter_for_unknown_format(self):
@@ -110,4 +110,23 @@ class PipelineTests(unittest.TestCase):
   self.assertIn('rectangular',self.run_cli('validate','--work',self.work,ok=False).stderr)
   e.update(role='body',table_ref='missing');f.write_text(json.dumps(d))
   self.assertIn('table_ref',self.run_cli('validate','--work',self.work,ok=False).stderr)
+ def test_quality_rejects_dictionary_substitution(self):
+  import slide_translate as p
+  for text in ['What does "E-健康" refer 到?', '译文：vendors', 'Reduced operating 和 maintenance 成本']:
+   issues,_=p.quality_findings({1:{'items':[dict(zh=text,role='body',status='translated')],'notes':[]}})
+   self.assertTrue(issues,text)
+ def test_quality_allows_chinese_acronyms_and_named_exception(self):
+  import slide_translate as p
+  e=dict(zh='电子健康记录（EHR）；Intel 处理器，剂量 0.5 mg。',role='body',status='translated',retained_terms=[dict(text='Intel',reason='品牌名')])
+  self.assertEqual(p.quality_findings({1:dict(items=[e],notes=[])})[0],[])
+ def test_join_fragments_preserves_one_readable_paragraph(self):
+  import slide_translate as p
+  p.choose_font(None,'医院、诊所、医生和医疗卫生人员')
+  entries=[dict(zh=t,role='body',status='translated',join_previous=i>0) for i,t in enumerate(['医院、诊所、','医生和医疗卫生','人员'])]
+  paras=p.page_paragraphs({},dict(items=entries,notes=[],unreviewed=False))
+  self.assertEqual(len(paras),1);self.assertEqual(paras[0].getPlainText(),'医院、诊所、医生和医疗卫生人员')
+ def test_build_blocks_partial_english(self):
+  self.prepare();self.fill();f=next((self.work/'responses').glob('*.json'));d=json.loads(f.read_text());d['items'][0]['zh']='Evidence-基于 医学';f.write_text(json.dumps(d))
+  self.run_cli('build','--work',self.work,'--output',self.root/'bad.pdf',ok=False)
+  self.assertFalse((self.root/'bad.pdf').exists());self.assertTrue((self.work/'quality-report.json').exists())
 if __name__=='__main__':unittest.main()

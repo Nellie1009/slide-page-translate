@@ -15,6 +15,10 @@ description: Use when the user asks to translate slides or a lecture deck page b
 - 只有聊天、不能运行代码：读取 [纯模型使用方法](references/model-only.md)，给用户现成脚本、逐批提示词与确切命令。没有执行端就不能生成真实 PDF；不要假称已导出。包内 `MODEL_ONLY_KIT.md` 是可整份交给其他模型的自包含版，含完整代码。
 - 模型看不到图片：执行端可先 OCR。图中标签、颜色和公式仍需可看图模型或人工核对。未核对时不得填写 `reviewed`；如确实交付文字部分版本，使用明确标注限制的选项。
 
+## 翻译质量底线
+
+开始翻译前必读 [质量标准与正反例](references/quality-examples.md)。逐句理解并翻译为完整、自然的中文；禁止词典/正则替换冒充翻译、用“译文：”包装英文、批量虚填已看图。术语、图内文字和表格都要翻译；只允许有依据的专名、缩写、单位等保留。按原图分配标题/小标题/列表/图注，机械断行用 `join_previous` 连接，不能删除或合并 ID。先检查代表页，再继续全稿。
+
 ## 1. 准备原页与小批次
 
 依赖：`python -m pip install -r "SKILL/scripts/requirements.txt"`。在已有依赖环境中不重复安装。字体、不同输入和报错见 [运行说明](references/runtime.md)。
@@ -51,12 +55,13 @@ PDF 直接读取；PPT/PPTX/ODP 等使用本机 LibreOffice；图片文件或图
 
 例如：`{"id":"p0001-t0001","zh":"医学成像简介","role":"title","status":"translated"}`。`zh` 使用纯文本，不用 Markdown 或 HTML 设置样式。标题使用字体描边加填充加粗，无需另装中文粗体字体。小标题尽量和后面的正文一起换页；长段落自动续页，不缩小字号。
 
-旧响应未填写 `role` 仍可导出：普通条目按正文，`figure_notes` 按图注；要让旧译文也有标题层级，先参照原图补充 role，再 build。非法 role 会被校验拒绝。
+旧响应必须先参照原图补齐 `role` 再导出。新增质量检查会阻止缺失类型、占位译文及疑似漏译英文；按报告修正，不绕过检查。确需保留的英文按质量示例填写 `retained_terms`。
 
 ## 3. 校验并导出唯一最终格式
 
 ```bash
 python "SKILL/scripts/slide_translate.py" validate --work "job"
+python "SKILL/scripts/slide_translate.py" audit --work "job"
 python "SKILL/scripts/slide_translate.py" build --work "job" --output "逐页对照翻译.pdf"
 ```
 
