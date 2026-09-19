@@ -18,7 +18,7 @@ class PipelineTests(unittest.TestCase):
   else:self.assertNotEqual(p.returncode,0,p.stdout+p.stderr)
   return p
  def prepare(self):
-  self.run_cli('prepare',self.src,'--work',self.work)
+  self.run_cli('prepare',self.src,'--layout','two-column','--work',self.work)
   return json.loads((self.work/'manifest.json').read_text())
  def fill(self,long=False):
   for req in sorted((self.work/'requests').glob('*.json')):
@@ -54,7 +54,7 @@ class PipelineTests(unittest.TestCase):
   from PIL import Image
   folder=self.root/'images';folder.mkdir()
   Image.new('RGB',(100,50),'red').save(folder/'slide10.png');Image.new('RGB',(100,50),'blue').save(folder/'slide2.png')
-  self.run_cli('prepare',folder,'--work',self.work)
+  self.run_cli('prepare',folder,'--layout','two-column','--work',self.work)
   m=json.loads((self.work/'manifest.json').read_text());self.assertEqual(len(m['pages']),2);self.assertEqual(len(m['chunks']),2)
   from PIL import Image as Img
   pixel=Img.open(self.work/m['pages'][0]['image']).getpixel((30,30));self.assertGreater(pixel[2],pixel[0])
@@ -65,7 +65,7 @@ class PipelineTests(unittest.TestCase):
   self.assertEqual(len(PdfReader(self.root/'images.pdf').pages),2)
  def test_external_pdf_adapter_for_unknown_format(self):
   other=self.root/'slides.key';other.write_bytes(b'fixture')
-  self.run_cli('prepare',other,'--normalized-pdf',self.src,'--work',self.work)
+  self.run_cli('prepare',other,'--layout','two-column','--normalized-pdf',self.src,'--work',self.work)
   self.assertEqual(len(json.loads((self.work/'manifest.json').read_text())['pages']),3)
  def test_reject_output_non_pdf(self):
   self.prepare();self.fill();self.run_cli('build','--work',self.work,'--output',self.root/'out.html',ok=False)

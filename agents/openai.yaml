@@ -1,4 +1,4 @@
 interface:
-  display_name: "课件逐页对照翻译 PDF"
-  short_description: "将各类课件按原页码对照翻译为 PDF，附小模型提示词与固定脚本"
-  default_prompt: "使用 $slide-page-translate 将这份课件按实际页码逐页翻译为中文，保留原页对照，只输出 PDF。"
+  display_name: "课件三栏翻译与知识点梳理"
+  short_description: "原课件、保留版式的中文翻译页与精简复习提纲三栏对照，按页核验后交付 PDF"
+  default_prompt: "使用 $slide-page-translate 按三栏规范处理课件：原 PPT、保留原字号颜色位置及插图的中文页、按整份PPT取舍知识架构、术语、中英双语短答和易混辨析的精简复习提纲，无内容可留空；先核对执行能力，再交付 PDF。"

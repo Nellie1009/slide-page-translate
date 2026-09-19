@@ -43,7 +43,7 @@ class DiagramTests(unittest.TestCase):
    root=Path(td);source=root/'source.pdf';job=root/'job'
    c=canvas.Canvas(str(source));c.drawString(30,700,'Example');c.save()
    def run(*args):return subprocess.run([sys.executable,str(Path(s.__file__)),*map(str,args)],capture_output=True,text=True)
-   self.assertEqual(run('prepare',source,'--work',job).returncode,0)
+   self.assertEqual(run('prepare',source,'--layout','two-column','--work',job).returncode,0)
    f=next((job/'requests').glob('*.json'));q=json.loads(f.read_text())
    response=dict(document_id=q['document_id'],chunk_id=q['chunk_id'],visual_review='reviewed',items=[dict(id=q['items'][0]['id'],zh='完整正文',role='body',status='translated',diagram=FLOW)],figure_notes=[dict(source='原页时间图',zh='项目安排',role='caption',status='translated',diagram=GANTT)])
    dest=job/'responses'/f.name;dest.write_text(json.dumps(response))

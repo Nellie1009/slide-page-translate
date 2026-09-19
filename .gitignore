@@ -25,3 +25,7 @@ tmp/
 .env
 .env.*
 !.env.example
+
+# Only synthetic, reviewed public demo PDFs are versioned
+!assets/examples/imaging-basics-source.pdf
+!assets/examples/imaging-basics-three-column.pdf

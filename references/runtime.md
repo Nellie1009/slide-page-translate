@@ -1,131 +1,165 @@
-# 执行端说明
+# 执行接口与能力边界
 
-## 环境
+## 运行环境
 
-Python 3.10+，安装 `scripts/requirements.txt`。脚本不含模型 API，不发送网络请求，也不需要 API key；依赖安装本身可能联网。输入和译文均在执行端本地处理。
+使用 Python 3.10+ 和 `scripts/requirements.txt` 中的依赖：pypdf、pdfplumber、ReportLab、Pillow，以及处理复杂 PDF 页面的 PyMuPDF（本版验证基线为 1.28.2）。三个执行模块 `slide_translate.py`、`three_column.py`、`layout_translation.py` 必须位于同一目录；不要只复制入口脚本。
 
-```bash
-python -m venv .venv
-# macOS/Linux
-source .venv/bin/activate
-# Windows PowerShell 改用：.venv\Scripts\Activate.ps1
-python -m pip install -r "SKILL/scripts/requirements.txt"
-python "SKILL/scripts/slide_translate.py" --help
-```
+已有可用环境不重复安装。在 Codex 中可用工作区依赖工具查找随应用提供的 Python、字体和 LibreOffice；必要时通过 `--soffice /实际路径/soffice` 指定转换器。不要把开发机器的绝对路径写成通用依赖。
 
-也可用已有的可用 Python 解释器，不必重建虚拟环境。Codex 本地可调用 load_workspace_dependencies 找到自带 Python。不得在提示词里固定开发者电脑路径。
+PDF 直接复制为任务内的 `original.pdf`。PPT/PPTX 等 Office 输入先经本机或运行环境提供的 LibreOffice 导出 PDF；核对字体、公式、隐藏页、动画静态化及页序。当前不编辑 PPTX 的 shape/run，不交付可编辑中文 PPTX。其他格式先由原应用导出，再用 `--normalized-pdf` 接入；链接需先用已授权方式取得文件，脚本不抓取网页。
 
-## 输入兼容策略
+图片目录按文件名自然排序，多帧 TIFF 保持帧序。`--ocr` 需本机 Tesseract，仅帮助识读没有原生文字的页；OCR 不创建可信的原位文字对象或自动擦除区域。schema v2 的可替换对象来自原生 PDF 几何抽取，扫描字仍需看图并人工提交位置。
 
-| 输入 | 自动路径 | 没有转换器时 |
-|---|---|---|
-| PDF | 直接保留原页 | 加密文件用有权限的原应用导出未加密副本 |
-| PPT/PPTX/ODP/PPS/PPSX/POT/POTX | 本机 LibreOffice 无界面导出 | PowerPoint/LibreOffice 导出 PDF |
-| PNG/JPEG/TIFF/BMP/WebP | 原图嵌入 PDF | HEIC/其他图片先用原应用转 PNG 或 PDF |
-| 图片文件夹 | 仅识别支持的图片，文件名自然排序 | 先按 001、002 等命名确认顺序；非图片文件不作为页 |
-| Keynote/HTML/网页/Google Slides/其他 | 使用原应用 PDF 导出，接入统一流程 | 导出/打印 PDF，再继续 |
-
-“输入格式不限”采用转换接口实现，**不等于无依赖解析任何二进制格式**。对于任何可导出 PDF 的格式都能接入，不能导出或无法访问的源必须说明缺少哪一步。URL 不直接传给 CLI：先在有权限的浏览器或连接器取得本地原文件/PDF，不能臆测网页内容。
+## 默认流程与真实 CLI
 
 ```bash
-python "SKILL/scripts/slide_translate.py" prepare "源文件.key" --normalized-pdf "源文件导出.pdf" --work "job"
-python "SKILL/scripts/slide_translate.py" prepare "源文件.pptx" --soffice "/path/to/soffice" --work "job"
-python "SKILL/scripts/slide_translate.py" prepare "图片目录" --work "job"
+python "SKILL/scripts/slide_translate.py" prepare "课件.pdf" --work "job"
+# 查看原页与上下文，按批填写 job/responses/<chunk_id>.json。
+python "SKILL/scripts/slide_translate.py" validate --work "job" --partial
+# 全部响应齐全后：
+python "SKILL/scripts/slide_translate.py" validate --work "job"
+python "SKILL/scripts/slide_translate.py" audit --work "job"
+python "SKILL/scripts/slide_translate.py" build --work "job" --output "三栏学习资料.pdf"
+python "SKILL/scripts/slide_translate.py" verify --work "job"
 ```
 
-导出时确定隐藏页、动画步骤是否需要保留；遵循用户要求，否则使用应用正常的完整课件静态导出并检查。不把演讲者备注当可见页面正文。外部 PDF 必须确实来自该输入，脚本无法证明两份文件语义相同。
+`SKILL` 替换为实际技能目录。默认 `prepare` 等同 `--layout three-column`，生成 schema v2。明确选择历史双栏时，创建新任务并加 `--layout two-column`；后续命令依 manifest 版本自动路由，不能在 `build` 时切换布局，也不能把旧响应当作 v2 响应。
 
-## OCR 与图像
+| 命令 | 参数与用途 |
+|---|---|
+| `prepare INPUT --work JOB` | 可加 `--normalized-pdf`、`--soffice`、`--labels`、`--glossary`、`--chunk-chars`（默认 1400）、`--dpi`（默认 130）、`--ocr`、`--ocr-lang`（默认 eng）、`--layout`、`--text-backend auto/mupdf`、`--exam-syllabus` |
+| `validate --work JOB` | `--partial` 检查已完成批次并报告剩余批次；完整校验检查全部覆盖 |
+| `audit --work JOB` | 完整校验后检查译文中的部分英文残留和类型问题，生成质量报告 |
+| `build --work JOB --output RESULT.pdf` | 完整校验、审查并生成三栏；`--font` 指定覆盖目标字符的 TrueType 字体，`--force` 允许替换已有结果 |
+| `verify --work JOB` | 核验最终 PDF 哈希和页数，生成全部缩略图；`--pages 2,5` 额外渲染指定输出页 |
 
-每页都生成图片，即使已有可抽取文字也要核对图中嵌入标签。`--ocr` 只为没有原生文本的页调用本机 Tesseract，不覆盖已有文字；它不能保证读出混合页面内的所有图片标签。
+`validate/audit/build` 保留兼容参数 `--allow-unreviewed-images`，但 **schema v2 不允许豁免真实看图**。没有 `--layout` 之外的自由画布、改字号、移动文本框或插入外部配图参数。`--exam-syllabus` 接收非空 UTF-8 文本文件，不直接解析考纲 PDF。
 
-```bash
-python "SKILL/scripts/slide_translate.py" prepare "扫描课件.pdf" --work "job" --ocr --ocr-lang "eng" --dpi 200
-```
+`prepare` 不覆盖非空工作目录；续做时复用原任务和正确响应。源 PDF 的 SHA-256 是 `document_id`，实际文件页序是唯一对应依据，印刷页码仅作标签。请求、几何和考纲都有一致性检查；不要编辑 manifest 或请求来掩盖错误，源文件变化时创建新任务。
 
-OCR 需要另装 Tesseract 和对应语言数据。例如中英混排使用 `eng+chi_sim`，前提是本机有这些语言包。没有 OCR 仍可给视觉模型看每页图片，并在 figure_notes 中完成译文。纯文本模型只能使用执行端提供的 OCR/人工转录，不能标记已经看图。
+## 源文字与响应映射
 
-## 页码与上下文
+任务包含 `original.pdf`、逐页图片、`manifest.json`、`deck-context.json`、`requests/`、`prompts/`、`responses/`。每页第一批也承载本页教学内容；课件上下文可在 `deck-context.json` 中查看。
 
-`--labels labels.json`：例如 `{"1":"1","2":"1","3":null}`。键为实际源页号，值为原页可见标签。重复页脚不影响顺序；罗马数字等可手动标注。准备后如发现标签有误，仅修正 manifest 中相应 `printed_label`（不改 page、ID、源文件或请求）；在之后核对 PDF 顶栏。
+原生文字条目包含 `id/source/layout/unreadable`，`layout` 记录坐标、基线、字号、字体、颜色等抽取证据。通常一个 ID 对应一个 PDF 文字显示操作；PyMuPDF 路径中对应文字 span。它们不是重新识别的完整段落，不能假定一条就是一句。模型要结合前后条目理解完整段落，但按原 ID 返回，不能合并或拆分源对象。`--chunk-chars` 是分批参考阈值，不拆开单个文字对象。
 
-`--glossary glossary.txt`：一行一术语，例如 `attenuation = 衰减`。每批都会携带术语表。先统一高频专业词，再翻译，避免小模型在不同请求中自行换词。
-
-请求按源页与文字长度拆分，不跨页合批。一个超长原文行也会拆成多个条目；模型须结合原页图像理解断行，逐 ID 返回，不能合并删除 ID。程序验收的是覆盖关系，不保证翻译语义。
-
-## 中文字体
-
-默认查找本机常见 CJK 字体（macOS Arial Unicode、Windows Arial Unicode、Linux AR PL 等），并在 PDF 中嵌入所需字符。若找不到，显式指定：
-
-```bash
-python "SKILL/scripts/slide_translate.py" build --work "job" --output "译文.pdf" --font "/path/to/font.ttf"
-```
-
-需要覆盖实际译文的 TrueType 轮廓字体。某些 Noto/Source Han `.otf` 或 `.ttc` 使用 CFF 轮廓，ReportLab 不支持，需换 TrueType 版本。脚本会检查缺字并拒绝输出乱码。没有随包分发商业字体。PDF 左侧原页使用原文件字体/图形，不重新绘制其文字。
-
-## 完整性与恢复
-
-- `original.pdf` 的 SHA-256 作为文档 ID。不能把别的课件译文混进来。
-- 每个 chunk 只接受一个同名 JSON，每个原文 ID 恰好一次。额外或丢失条目均报错。
-- 拒绝空译文和 pending 状态。unreadable 允许，但最终显示明确说明，不宣称完整识别。
-- 模型用 Markdown 的单个 JSON 代码围栏包裹响应时可以读取；其他多余解释、多个对象需要重做/整理。
-- 可用 `validate --partial` 检查已保存批次并显示剩余清单；它不能使 build 跳过缺失内容。
-- 再运行 prepare 不覆盖已有 job；继续填写已有 responses，然后 validate/build。
-- build 默认不覆盖已有 PDF，更新时用 `--force`。仍禁止覆盖本次输入及 original.pdf。
-- 机械验证只确认身份、覆盖、基本结构、分页、可抽取中文及文件完整性。数字翻错、图表语义错、伪称看图等需要人工/模型对照检查，不能仅凭校验通过声称翻译正确。
-
-## 最终版面
-
-A3 横向，完整原页左侧、分层中文右侧（标题 21 pt、小标题 16 pt、正文 13 pt、图注 11 pt、脚注 10 pt）；超长译文续页，字号不缩小。源页可能横向、纵向、旋转、裁剪，按原可见裁剪框等比例缩放。每页有源页号、原页标签、输出页号；续页有分段号。图像仍小的场景可在 PDF 中放大；原本低分辨率的图片不能凭空变清晰。
-
-```bash
-python "SKILL/scripts/test_pipeline.py"
-```
-
-随附测试用于验证脚本机制。具体环境是否有 Office 转换器、OCR 与目标字体，需单独验证；不要将未测的转换器称为已验证。
-
-
-## 原表格按表格翻译
-
-原页出现表格，中文栏也优先使用真正的表格，不能把单元格拼成散文或用截图代替译文。保留行列对应、表头层级、行标识、单位、空白格和脚注；看不清的格子明确写“无法辨认”，不能补值。合并单元格可通过重复上级表头展开，但必须明确归属。宽表按列拆分并重复行标识；长表跨页重复表头，保持可读字号。
-
-在首个相关 `items` 条目中保留 `id`、`zh`、`status`，设置 `role="table"`，增加二维字符串数组 `rows` 和整数 `header_rows`（无表头为 0）。例如：
+下面是每页第一批的响应结构示例。身份、ID 和源页号均须替换为请求的真实值；示例内容不应照抄到无关课件。
 
 ```json
-{"id":"p0001-t0002","zh":"成像方式对照","status":"translated","role":"table","header_rows":1,"rows":[["方式","特点"],["MRI","软组织对比度高"],["CT","使用 X 射线"]]}
+{
+  "document_id": "复制请求中的 document_id",
+  "chunk_id": "p0001-c001",
+  "visual_review": "reviewed",
+  "items": [
+    {
+      "id": "p0001-t0001",
+      "zh": "信号",
+      "role": "title",
+      "status": "translated"
+    },
+    {
+      "id": "p0001-t0002",
+      "zh": "已有中文",
+      "role": "body",
+      "status": "preserved",
+      "preserve_reason": "chinese"
+    }
+  ],
+  "figure_notes": [],
+  "study": {
+    "mode": "outline",
+    "page_kind": "content",
+    "points": [
+      {
+        "kind": "short_answer",
+        "title": "短答｜处理器分工",
+        "question_zh": "CPU的作用是什么？",
+        "question_en": "What is the role of the CPU?",
+        "answer_zh": "协调应用运行。",
+        "answer_en": "Coordination.",
+        "source_pages": [
+          1
+        ]
+      }
+    ]
+  }
+}
 ```
 
-所有原条目仍逐一提交非空译文；其余已被该表覆盖的条目增加 `table_ref="p0001-t0002"`，脚本仅在首条位置绘制整表，避免重复。引用只能指向同一源页的表格。跨批次时依据同一原页填写整表，后续批次引用原表 ID；不要为凑结构改动 ID。未提取出的整表可放入第一批 `figure_notes`，保留 `source`、`zh`、`status`，同样提供 `role`、`rows`、`header_rows`。
+- `items` 必须完整且恰好一次覆盖本批 ID。`zh` 非空；角色用 `title/heading/body/bullet/caption/footnote`。角色是内容标记，不改变源字号或位置；表格按原对象逐条译，不用旧 `table/rows` 重排。
+- `status` 用 `translated` 或 `preserved`。`preserved` 必须与源文字完全相同，并有 `preserve_reason: chinese/notation/code/name/url`；仅适用于本来不需要翻译的中文、符号、代码、名称或网址，不能豁免未译自然语言。含外文的混合段落需译出外文并保护已有中文、数字和公式。
+- 原生条目不得提交 `layout`、`retained_terms`、`table_ref`、`join_previous`、`diagram`、`rows`。不要照抄请求中的整个对象；布局由源记录决定。
+- `unreadable` 状态不能导出；无法辨认的原生字形也会阻止原位制作。只有真实查看原图才可写 `reviewed`；`unavailable` 记录的是未完成状态，不通过 v2 校验。
+- 每页第一批必须提交 `study`，且只有它可以提交 `figure_notes`。后续批次使用 `study: null` 和 `figure_notes: []`。
 
-单元格只能填纯文本；每行列数必须相同，空格填空字符串，表头行数必须小于总行数。检查渲染后的每张表，逐格核对对应关系、数字、单位、表头和续页。结构校验不能代替内容核对。旧 job 的提示词不会自动更新，继续旧任务时也应把本节规则交给翻译模型。
+## study：默认精简复习提纲
 
-## 译文质量检查
+每页第一批使用 `mode: "outline"`，`page_kind` 为 `content/title/transition/references/blank`；`points` 为列表。后续批次仍为 `study: null`。
 
-逐句翻译，禁止用词典替换生成中英夹杂的正文。导出前运行 `audit --work job`；`build` 也会自动执行该检查。缺失 role、“译文：”占位、疑似英文残留会阻止导出。质量报告为 `job/quality-report.json`；修正后重试。新旧任务都须补齐内容类型并核对自然中文，不能把校验通过当作语义准确。
+- `points: []` 表示第三栏完全留空；脚本不打印栏目标题、说明或占位句，也不丢失该源页。
+- 普通条目包含 `kind: structure/term/distinction`、可选 `title`、非空 `answer` 和 `source_pages`。`answer` 可用换行写简短层次。为兼容旧精简数据，也接受 `kind: note` 或省略kind。
+- `kind: short_answer` 包含可选 `title`、非空的 `question_zh/question_en/answer_zh/answer_en` 及 `source_pages`。四个语言字段必须齐全；脚本相邻打印中文题、英文题、中文答、英文答，不额外生成自测区。模型仍须核对两种语言语义一致。
+- 来源页必须属于当前任务，保存在数据中；不自动逐条打印来源标签。第三栏按整份PPT规划，不强迫每页拥有相同类型或数量。
+- 无考试证据不得写必考、官方考纲等。普通条目不强制双语，短答强制双语。
 
-阅读[完整正反例与断行处理](quality-examples.md)。
+旧任务的 `objective/sections/self_test/exam` 结构仍可读取；它的必填字段及考纲逐字证据校验保持兼容。新任务不再用旧结构强迫每页生成学习目标、讲解和复习建议。
 
-## 完整翻译规则（先读，再处理每批）
+第三栏支持文字段落与问答，不提供额外图片或 `diagram` 接口。条目写法及取舍见[study-guide.md](study-guide.md)。
 
-交付目标是让读者只读中文栏就能理解原页的全部信息。左侧保留英文原页，不是右侧省略翻译的理由。
+## 图中漏抽文字与无文字页
 
-1. **翻译完整意思，不做单词替换。** 先读懂同页上下文，再逐句写成自然中文。专业术语、普通词、标题、列表、表头、图例、图中标签和脚注中的说明都要译出。不能只翻熟悉的词，把不会翻的部分留下。
-2. **专业不等于免译。** lithotripter 应译为“碎石机”，kidney stones 为“肾结石”，intensity 为“强度”。whether、should、get、people 等普通词必须在中文句意中体现，不能声称是专名。不得自行生成“保留术语清单”“白名单”“豁免理由”，也不得添加 retained_terms 来让未译内容通过检查。
-3. **先提供中文含义，再考虑原文标识。** 首次出现缩写，写“人工智能（AI）”“磁共振成像（MRI）”；后文可使用已解释的缩写。品牌、机构有通行中文名时使用中文名，如“英特尔”“世界卫生组织”。确无可靠中文译名的人名，保留准确拼写并译出其职务和相关说明，不编造译名。数值、单位、公式、网址和产品型号保持准确；这不允许保留包围它们的整句英文。文献标题的含义也须翻译，作者和出版标识保持准确。
-4. **跨行先合读，再分配译文。** 抽取出的多条文本可能是同一句。先通读整句，按中文语序写出完整译文，并用 join_previous 连接同段条目，保留每个 ID。不同要点分开，不能因断行重复、漏掉成分或把半句话当标题。
-5. **按照原页信息层级展示。** 识别主标题、小标题、要点、图注和表格后填写 role，不能用“第一条就是标题”或字数阈值猜测。正文不随意加粗放大，表格保留对应关系，图示明确分组及箭头关系。
-6. **逐批完成，逐批自查。** 模型本人必须完成各批的理解和翻译。代码可以保存已写好的译文，但不能用词典、正则、字符串替换函数生成未翻译的内容。无法一口气完成就分批继续，不降低标准、不填充占位结果。
-7. **遇到问题修正文，不改规则。** 正常可读的英文不会翻，不能标记为 unreadable，也不能改为 preserved。看不清仅适用于原文确实无法辨认，须注明位置。检查报错时回看原文、修正译文；不得登记普通词为例外、删除检查或用更改状态消除报错。若合法人名等仍被工具误报，明确报告误报，不能伪造翻译或复核记录。
-8. **读完中文再交付。** 每句检查主谓关系、否定、条件、因果、比较、数字与单位；逐项对照原文，确保没有未解释的普通英文和漏掉的信息。不能以 PDF 已生成、JSON 合法或程序检查通过代替翻译完成。
+原插图直接复用原 PDF 内容，不下载、不重新生成。原生图标签若已出现在 `items`，按原生条目处理。未被抽出的栅格字在真实看图、确认纯色背景且不会遮挡图形后写入首批 `figure_notes`：
 
-## 图形排版默认规范（所有模型模式一致）
+```json
+{
+  "source": "Signal",
+  "zh": "信号",
+  "role": "caption",
+  "status": "translated",
+  "layout": {
+    "bbox": [40, 60, 120, 84],
+    "font_size": 12,
+    "color": [0, 0, 0],
+    "background_color": [1, 1, 1],
+    "background_verified": true
+  }
+}
+```
 
-以下只约束已经决定绘制的结构图，不是加图要求，也不覆盖用户“不要自己画”的选择。现成图片沿用原图表达，不为套用此样式而重画。外部图片入栏、讲解模式与多文件合并尚非本脚本接口，能力边界见 [逐页配图与简洁修订](visual-notes.md)。
+坐标单位为 PDF 点，原点在对应源页左上角；`bbox` 为左、上、右、下，颜色为 0–1 RGB。可显式给 `origin: [x, y]`；省略时基线取 `[bbox.left, bbox.top + font_size]`。示例坐标仅说明结构，不能拿去覆盖实际课件。字体和字号来自栅格观察，属于近似，记录在版面报告中。PyMuPDF路径也接受 `background_change_authorized: true`，仅用于用户明确允许局部背景改动时，不得伪填 `background_verified`；须保护关键图形、数值和连线。支持 `rotation: 0/90/180/270` 的图中文字。与原生文字交叠的覆盖区域仍会被拒绝。
 
-流程图统一采用已确认的清晰样式：主流程自上而下，蓝色粗实线和明显箭头直连；节点使用浅色圆角矩形、文字放大居中；条件直接写在线旁。反馈回路放右侧，用橙色区分，明确指回目标节点。颜色用于区分路径，不额外赋予“安全/危险”等原文没有的含义。
+真正完全没有文字的页面仍需看图、提供 `study`，并在首批添加明确的确认，例如：
 
-禁止将连线全部挤在左侧，再让读者查数字图例理解关系。旧示例第二页的“左侧多条线＋编号说明”不是合格模板，不得模仿。复杂关系若不能清楚绘制，改用有明确标题的分组列表或关系对照表，保留关系说明；不能为了套用上下流程样式，把并列或分类关系画成先后顺序。
+```json
+{
+  "source": "本页无文字",
+  "zh": "本页无文字",
+  "role": "caption",
+  "status": "preserved",
+  "no_text": true
+}
+```
 
-使用当前脚本时，将真实连续主流程按顺序放入 nodes，每对相邻节点填写原页确实存在的 edges；最多一条返回前面节点的反馈边，即可自动采用清晰流程样式。原图不满足这种结构时，不要编造连线以触发布局；使用表格、分层列表或合理拆分的子流程表达。时间轴和甘特图仍按各自时间规则绘制。
+该确认不能有 `layout`，不能替代扫描页或漏抽页上的真实文字翻译。程序不能通过这个布尔值证明整页无字，须由看图复核保证。
 
-验收标准：不读额外编号图例，也能直接看出从哪里开始、下一步是什么、什么条件走哪条路、反馈回到哪里。Agent、具备执行能力的普通模型及纯聊天模型的翻译请求都遵守本规范，不能因模式不同降低可读性。
+## 原位引擎与限制
+
+常规 PDF 优先按文字显示操作删除待译原字并叠加中文，保留原图片和矢量操作。旋转页、裁切或非零页原点、带文字的 Form XObject 等复杂页面采用 PyMuPDF 后备路径；它归一化页旋转并仅移除原文字，保留图片和图形。后备路径不是任意 PDF 编辑保证：非正交旋转、无法解码的字形、不安全交叠及不支持的文字状态会明确失败，需要结合具体输入解决。
+
+原字号、基线和颜色是受支持替换的基准。常规路径可复用覆盖目标字的标准 PDF 字体；后备路径会尝试复用可提取且覆盖目标字的原字体。不能满足时使用 `--font` 或自动找到的中文字体，记录 `font_substitutions`。ReportLab 字体需为其可加载的 TrueType 轮廓；并非所有 OTF/TTC 都可用。回退字形、字重、斜体和度量可能不同，不能宣称原字体完全还原。
+
+已标记保留的中文、公式与其他无需翻译的对象不重新排字。混合语言同一文字对象中的保护内容由模型保持正确；程序不自动理解或证明公式语义。替换文字是叠加层，须检查原图遮挡顺序和附近标注。
+
+严格检查原字号下的文字宽度，超出源区域就报出 ID、所需宽度和区域宽度；不自动缩小、不折行重排、不截断。还需视觉检查字形上下边界、重叠和复杂背景，不能把宽度检查当成全部版面验收。任何布局调整都需要另行具体处理，当前响应没有任意布局覆盖接口。
+
+三栏画布固定为 1836 × 841.89 点，前两栏各在 650 点范围内等比缩放，第三栏文字宽 432 点。当前没有自定义纸张参数。只有第三栏续页；前两栏不会因讲解长度而拆分。
+
+## 输出与验收
+
+成功 `build` 保存中栏单页 PDF `translated.pdf`、`layout-report.json`、`build-report.json` 和指定最终 PDF。版面报告记录字体替换、栅格近似与限制；原位制作失败时记录 `status: blocked` 及具体错误。构建报告含源页/输出页数、续页映射、前两栏缩放、列区域和文件哈希。`--force` 不允许覆盖原始输入、外部提供的归一化源 PDF、`original.pdf` 或受保护的译后中间文件。
+
+`validate` 检查身份、覆盖、来源、响应和考纲结构；`audit` 是有限的词法检查，不能判断完整句意、教学质量或图中漏译。`verify` 在 `qa/` 生成全部缩略图，并默认渲染首末页和知识点续页，额外页可用 `--pages` 指定。它不自动查看图像，报告中的视觉复核状态仍待人检查。
+
+最终必须检查全部输出页和每处文字替换：原文完整、中文准确、源字号/位置/颜色与插图保留、没有裁切遮挡、第三栏解释准确且来源可回溯。逐项披露仍存在的字体或版面差异；测试与校验通过不能代替这些检查。
+
+页面范围内的矩形裁切（如 LibreOffice 导出的页边界裁切）可保留；限制文字可见区域的局部裁切、不支持的文字渲染模式会被拒绝，包括 Form 内部的情况。
