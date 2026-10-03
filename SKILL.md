@@ -7,7 +7,7 @@ description: Use when the user requests page-by-page slide translation, layout-p
 
 默认交付 PDF，同一源页从左到右为：**原 PPT｜原位中文页｜知识点梳理**。当前模型直接完成完整翻译与精简复习资料；随附 schema-v2 执行器负责原页对应、受支持区域的原位文字替换、三栏合成与检查。
 
-开始前读[运行说明](references/runtime.md)、[版面规范](references/three-column-layout.md)和[知识点规范](references/study-guide.md)。实际接口与能力以运行说明和脚本为准；规范中的保真目标不是任意文件均可无损编辑的保证。
+执行文件任务时先读[运行说明](references/runtime.md)确认真实接口；只有涉及具体布局边界或教学提纲取舍时，再读[版面规范](references/three-column-layout.md)或[知识点规范](references/study-guide.md)。质量示例、结构图、纯聊天等参考按需读取，不要每页、每批重复读整套文档。实际能力以运行说明和脚本为准。
 
 ## 三栏契约
 
@@ -35,11 +35,12 @@ description: Use when the user requests page-by-page slide translation, layout-p
 
 ## 执行顺序
 
-1. 保留源文件，用 `prepare INPUT --work JOB` 创建默认三栏任务。PPTX 可用 `--soffice` 指定随运行环境提供的 LibreOffice；已有可靠 PDF 导出可用 `--normalized-pdf`。核对转换后的页数、顺序、字体、公式与裁切。正式考纲文本可用 `--exam-syllabus` 接入。
-2. 通览 `deck-context.json` 和原页图片，梳理课程逻辑。按 `prompts/` 与 `requests/` 的 ID 翻译，保存至 `responses/<chunk_id>.json`；先用实际存在的代表页检验保真效果，再连续完成全稿。
-3. 每页第一批填写 `study: {mode: "outline", page_kind: ..., points: [...]}` 和漏抽的 `figure_notes`；无复习内容用 `points: []`；后续批次使用 `study: null`、`figure_notes: []`。原生 `items` 只提交文字、角色与保留状态，不覆盖源 `layout` 或加入旧重排字段。完整字段见运行说明。
-4. 分批可运行 `validate --partial`；全部响应齐全后依次运行 `validate → audit → build --output RESULT.pdf → verify`。`build` 也会完整校验和审查；修复具体错误后重试，不改 manifest 绕过保护。
-5. 检查全部输出页缩略图，放大每处文字替换、图表、公式、低清晰区域和续页。对照前两栏检查位置、字号、颜色、原图、覆盖层及溢出，另核对第三栏事实、逻辑和来源。程序通过不能替代人工复核。
+1. 保留源文件，用 `prepare INPUT --work JOB` 创建默认三栏任务。PPTX 可用 `--soffice` 指定随运行环境提供的 LibreOffice；已有可靠 PDF 导出可用 `--normalized-pdf`。只检查一次转换后的页数、顺序、字体、公式与裁切。正式考纲文本可用 `--exam-syllabus` 接入。
+2. 通览 `deck-context.json` 和原页图片一次，记录整课术语、章节逻辑及第三栏内容分配，避免重复规划和跨页重复。先挑一页代表页检查翻译与版面，再连续完成全稿。
+3. 按相邻页面组织工作批次，建议从 3–5 页开始，依据文本量、图表密度及上下文依赖调整。批内集中读取原页、上下文和请求，集中写多个独立的 `responses/<chunk_id>.json`；保留每个请求自己的 ID 和 JSON 文件。密集公式、表格、扫描页或图片标签较多的页单独处理。已有正确响应直接续用，不重复翻译。
+4. 每页第一批填写 `study: {mode: "outline", page_kind: ..., points: [...]}` 和漏抽的 `figure_notes`；无复习内容用 `points: []`；后续批次使用 `study: null`、`figure_notes: []`。原生 `items` 只提交文字、角色与保留状态，不覆盖源 `layout` 或加入旧重排字段。完整字段见运行说明。
+5. 新响应写入后可用 `validate --partial` 检查进度；本批响应完整时用 `preflight --work JOB --pages 3,4` 汇总页面溢出等适配错误，依据报告只修失败条目。全部响应齐全后再次预检，再运行 `build --output RESULT.pdf` 和 `verify`。build 自动复用未变化页的原位中文缓存，缓存会在源、响应、字体、渲染器或依赖版本变化时失效。无需在收尾前再单独全量运行 `validate` 和 `audit`。修复具体错误后重建，不改 manifest 绕过保护。
+6. 检查全部输出页缩略图，放大每处文字替换、图表、公式、低清晰区域和续页。对照前两栏检查位置、字号、颜色、原图、覆盖层及溢出，另核对第三栏事实、逻辑和来源。程序通过不能替代人工复核。
 
 ## 验收与交付
 

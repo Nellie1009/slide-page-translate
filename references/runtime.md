@@ -15,10 +15,11 @@ PDF 直接复制为任务内的 `original.pdf`。PPT/PPTX 等 Office 输入先�
 ```bash
 python "SKILL/scripts/slide_translate.py" prepare "课件.pdf" --work "job"
 # 查看原页与上下文，按批填写 job/responses/<chunk_id>.json。
+# 新增响应需要检查时：
 python "SKILL/scripts/slide_translate.py" validate --work "job" --partial
-# 全部响应齐全后：
-python "SKILL/scripts/slide_translate.py" validate --work "job"
-python "SKILL/scripts/slide_translate.py" audit --work "job"
+# 对响应完整的页面汇总原位文字适配问题（source page numbers）：
+python "SKILL/scripts/slide_translate.py" preflight --work "job" --pages 3,4
+# 全部响应齐全后；build 已运行完整校验与审查：
 python "SKILL/scripts/slide_translate.py" build --work "job" --output "三栏学习资料.pdf"
 python "SKILL/scripts/slide_translate.py" verify --work "job"
 ```
@@ -30,12 +31,15 @@ python "SKILL/scripts/slide_translate.py" verify --work "job"
 | `prepare INPUT --work JOB` | 可加 `--normalized-pdf`、`--soffice`、`--labels`、`--glossary`、`--chunk-chars`（默认 1400）、`--dpi`（默认 130）、`--ocr`、`--ocr-lang`（默认 eng）、`--layout`、`--text-backend auto/mupdf`、`--exam-syllabus` |
 | `validate --work JOB` | `--partial` 检查已完成批次并报告剩余批次；完整校验检查全部覆盖 |
 | `audit --work JOB` | 完整校验后检查译文中的部分英文残留和类型问题，生成质量报告 |
-| `build --work JOB --output RESULT.pdf` | 完整校验、审查并生成三栏；`--font` 指定覆盖目标字符的 TrueType 字体，`--force` 允许替换已有结果 |
+| `preflight --work JOB` | 检查已完成页面的原位译文适配；可用 `--pages 3,4` 限定源页、`--font` 指定字体；全部结果写入 `preflight-report.json`。未完成页面列为 pending，不会误报为通过 |
+| `build --work JOB --output RESULT.pdf` | 完整校验、审查并生成三栏；`--font` 指定覆盖目标字符的 TrueType 字体，`--force` 允许替换已有结果，`--no-cache` 强制重渲染全部原位中文页 |
 | `verify --work JOB` | 核验最终 PDF 哈希和页数，生成全部缩略图；`--pages 2,5` 额外渲染指定输出页 |
 
 `validate/audit/build` 保留兼容参数 `--allow-unreviewed-images`，但 **schema v2 不允许豁免真实看图**。没有 `--layout` 之外的自由画布、改字号、移动文本框或插入外部配图参数。`--exam-syllabus` 接收非空 UTF-8 文本文件，不直接解析考纲 PDF。
 
-`prepare` 不覆盖非空工作目录；续做时复用原任务和正确响应。源 PDF 的 SHA-256 是 `document_id`，实际文件页序是唯一对应依据，印刷页码仅作标签。请求、几何和考纲都有一致性检查；不要编辑 manifest 或请求来掩盖错误，源文件变化时创建新任务。
+`prepare` 不覆盖非空工作目录；续做时复用原任务和正确响应。三栏准备会直接抽取原生文字几何，不生成随后被丢弃的旧版文本请求。源 PDF 的 SHA-256 是 `document_id`，实际文件页序是唯一对应依据，印刷页码仅作标签。请求、几何和考纲都有一致性检查；不要编辑 manifest 或请求来掩盖错误，源文件变化时创建新任务。
+
+按相邻页面批量工作时，批次只是模型的读取和写入安排，不改变请求边界：每个 `chunk_id` 仍单独返回一个 JSON，首批/后续批的 `study` 与 `figure_notes` 规则保持不变。建议从 3–5 页试起，遇到密集图表、长文本或上下文难以保持时缩小批次。响应采用追加式续做。`preflight` 汇总可测的字号与区域适配问题，不替代完整 build 的安全检查，也不证明译文正确或视觉合格。Build 按源页缓存原位中文 PDF；缓存键包含源身份、该页几何与响应、字体文件、渲染脚本和相关库版本。修改受影响内容会重做相关页，其余页复用；最终三栏 PDF 仍会重新合成并完整校验。
 
 ## 源文字与响应映射
 

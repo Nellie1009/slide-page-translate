@@ -67,15 +67,14 @@ python -m pip install -r scripts/requirements.txt
 
 ```bash
 python scripts/slide_translate.py prepare "课件.pdf" --work "job"
-# 当前模型查看 job/pages、deck-context.json 和 prompts，
-# 按请求 ID 将完整翻译与复习内容保存到 job/responses/<chunk_id>.json。
-python scripts/slide_translate.py validate --work "job"
-python scripts/slide_translate.py audit --work "job"
+# 当前模型按相邻页面批量查看原图和请求，
+# 每个请求仍单独写入 job/responses/<chunk_id>.json。
+python scripts/slide_translate.py preflight --work "job" --pages 1,2
 python scripts/slide_translate.py build --work "job" --output "三栏复习资料.pdf"
 python scripts/slide_translate.py verify --work "job"
 ```
 
-没有可用默认字体时，在 `build` 加 `--font "中文字体.ttf"`。只完成部分批次可用 `validate --partial`。`verify` 生成预览后，仍须检查所有页面与替换区域，不能把程序通过当成语义或视觉验收。
+`preflight` 会一次列出所选完整页面的可测布局问题；未完成页面会标为待处理。`build` 会复用未变页面的原位中文结果，但仍完整合成和校验最终 PDF。没有可用默认字体时，在 `preflight` 和 `build` 使用同一 `--font "中文字体.ttf"`。`verify` 生成预览后，仍须检查所有页面与替换区域，不能把程序通过当成语义或视觉验收。
 
 每页第一批响应使用 `study: {"mode":"outline", "page_kind":"content", "points":[...]}`；无复习内容用 `points: []`；后续批次使用 `study: null`。短答必须提供 `question_zh`、`question_en`、`answer_zh`、`answer_en`。完整接口见[运行说明](references/runtime.md)。正式考纲可通过 `prepare --exam-syllabus "考纲.txt"` 接入。
 

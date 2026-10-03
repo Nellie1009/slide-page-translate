@@ -74,6 +74,13 @@ class LayoutTranslationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'p0001-t0001.*(fit|overflow)'):
             m.render_translated(self.source, manifest, results, out, FONT)
         self.assertFalse(out.exists())
+    def test_preflight_collects_overflows_without_rendering(self):
+        m, manifest, results = self.prepared()
+        item = results[1]['items'][0]
+        item['zh'] = '极长中文标题' * 20
+        findings = m.preflight_translations(manifest, results, FONT)
+        self.assertEqual([finding['id'] for finding in findings], ['p0001-t0001'])
+        self.assertIn('overflow', findings[0]['error'])
     def test_manifest_geometry_cannot_be_widened(self):
         m, manifest, results = self.prepared()
         manifest['pages'][0]['items'][0]['layout']['bbox'][2] = 390

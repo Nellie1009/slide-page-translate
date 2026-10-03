@@ -1,5 +1,6 @@
-import json, subprocess, sys, tempfile, unittest
+import argparse, json, subprocess, sys, tempfile, unittest
 from pathlib import Path
+from unittest.mock import patch
 from reportlab.pdfgen import canvas
 from pypdf import PdfReader
 
@@ -32,6 +33,54 @@ class ThreeColumnTests(unittest.TestCase):
  def test_default_prepare_records_layout_and_new_schema(self):
   m=self.prepare();self.assertEqual(m['schema_version'],2);self.assertEqual(m['layout'],'three-column')
   self.assertIn('layout',m['pages'][0]['items'][0]);self.assertIn('study',next((self.work/'prompts').glob('p*.txt')).read_text())
+ def test_three_column_prepare_skips_legacy_text_extraction(self):
+  import pdfplumber
+  import slide_translate as api
+  args=argparse.Namespace(input=str(self.source),work=str(self.work),normalized_pdf=None,soffice=None,labels=None,glossary=None,chunk_chars=1400,dpi=130,ocr=False,ocr_lang='eng',layout='three-column',text_backend='auto',exam_syllabus=None)
+  with patch.object(pdfplumber.page.Page,'extract_text',side_effect=AssertionError('unused legacy extraction')):
+   api.prepare(args)
+  manifest=json.loads((self.work/'manifest.json').read_text())
+  self.assertEqual(manifest['schema_version'],2)
+  self.assertEqual(len(manifest['pages']),2)
+ def test_saved_chunk_prompt_keeps_required_rules_without_repeating_long_guide(self):
+  from three_column import PROMPT
+  self.assertLess(len(PROMPT),1500)
+  for required in ['不调用新翻译服务','禁止缩字','visual_review','study=null','figure_notes=[]','source_pages']:
+   self.assertIn(required,PROMPT)
+ def test_build_reuses_native_translation_when_only_study_notes_change(self):
+  import argparse
+  import slide_translate as api
+  import layout_translation
+  self.prepare();self.fill();out=self.root/'out.pdf'
+  self.cli('build','--work',self.work,'--output',out)
+  f=next((self.work/'responses').glob('*.json'));data=json.loads(f.read_text())
+  data['study']['sections'][0]['body']='更新后的知识点。';f.write_text(json.dumps(data,ensure_ascii=False))
+  args=argparse.Namespace(work=str(self.work),output=str(out),allow_unreviewed_images=False,force=True,font=None)
+  with patch.object(layout_translation,'render_translated',side_effect=AssertionError('native PDF should come from cache')):
+   api.build(args)
+ def test_build_rerenders_only_page_whose_translation_changed(self):
+  import argparse
+  import slide_translate as api
+  import layout_translation
+  self.prepare();self.fill();out=self.root/'out.pdf';self.cli('build','--work',self.work,'--output',out)
+  f=self.work/'responses'/'p0001-c001.json';data=json.loads(f.read_text());data['items'][0]['zh']='运动和速度';f.write_text(json.dumps(data,ensure_ascii=False))
+  args=argparse.Namespace(work=str(self.work),output=str(out),allow_unreviewed_images=False,force=True,font=None)
+  original=layout_translation.render_translated
+  with patch.object(layout_translation,'render_translated',wraps=original) as render:
+   api.build(args)
+  self.assertEqual(render.call_count,1)
+  self.assertEqual(render.call_args.kwargs['page_numbers'],[1])
+ def test_preflight_reports_every_overflow_before_build(self):
+  self.prepare();self.fill()
+  for f in (self.work/'responses').glob('*.json'):
+   data=json.loads(f.read_text())
+   for item in data['items']:item['zh']='很长很长的中文翻译内容'*50
+   f.write_text(json.dumps(data,ensure_ascii=False))
+  result=self.cli('preflight','--work',self.work,ok=False)
+  report=json.loads((self.work/'preflight-report.json').read_text())
+  self.assertGreaterEqual(len(report['findings']),4)
+  self.assertIn('p0001-t0001',result.stdout)
+  self.assertIn('p0002-t0001',result.stdout)
  def test_missing_study_blocks_export(self):
   self.prepare();self.fill();f=next((self.work/'responses').glob('*.json'));d=json.loads(f.read_text());d.pop('study');f.write_text(json.dumps(d))
   r=self.cli('build','--work',self.work,'--output',self.root/'out.pdf',ok=False);self.assertIn('study',r.stderr);self.assertFalse((self.root/'out.pdf').exists())

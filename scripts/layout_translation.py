@@ -198,7 +198,73 @@ def _check_fit(zh, layout, font, item_id, synthesized_styles=False):
         raise ValueError(f'{item_id}: translation overflow; needs {text_width:.2f} pt at original {layout["font_size"]} pt, region width {x1-x0:.2f} pt. Supply a faithful shorter translation or explicitly approve a layout change')
 
 
-def render_translated(original_pdf, manifest, results, output_pdf, font_path):
+def preflight_translations(manifest, results, font_path, pages=None):
+    """Collect local translation-fit findings without rendering or modifying a PDF."""
+    fallback = _font(font_path)
+    selected = set(pages) if pages is not None else {p['page'] for p in manifest.get('pages', [])}
+    findings = []
+    for page in manifest.get('pages', []):
+        number = page['page']
+        if number not in selected:
+            continue
+        response = results.get(number, results.get(str(number), {}))
+        by_id = {item.get('id'): item for item in response.get('items', [])}
+        for item in page.get('items', []):
+            ident = item['id']; entry = by_id.get(ident, {})
+            if entry.get('status') == 'preserved' or entry.get('zh') == item.get('source'):
+                continue
+            layout = item.get('layout', {})
+            try:
+                if 'direction' in layout and 'matrix' not in layout:
+                    fitz = _mupdf(); chosen = fallback
+                    text = entry.get('zh')
+                    if not isinstance(text, str) or not text.strip() or '\n' in text or '\r' in text:
+                        raise ValueError(f'{ident}: empty or multiline text cannot fit source span')
+                    if not all(chosen.has_glyph(ord(ch)) for ch in text):
+                        raise ValueError(f'{ident}: fallback font lacks required glyphs')
+                    direction = tuple(layout.get('direction', []))
+                    rotations = {(1,0):0,(0,-1):90,(-1,0):180,(0,1):270}
+                    if direction not in rotations:
+                        raise ValueError(f'{ident}: nonorthogonal rotated text unsupported')
+                    rect = fitz.Rect(layout['bbox'])
+                    available = rect.width if rotations[direction] in (0,180) else rect.height
+                    width = chosen.text_length(text, fontsize=layout['font_size'])
+                    if layout.get('flags',0) & 2: width += layout['font_size']*.22
+                    if layout.get('flags',0) & 16: width += layout['font_size']*.025
+                    if width > available + .05:
+                        raise ValueError(f'{ident}: translation overflow; needs {width:.2f} pt at original {layout["font_size"]} pt, region {available:.2f} pt')
+                else:
+                    _validate_layout(layout, ident, page['width'], page['height'])
+                    a,b,c,d = layout['matrix']
+                    if layout['vertical'] or abs(b)>1e-6 or abs(c)>1e-6 or a<=0 or abs(a-d)>1e-6 or layout['scaling']!=100 or layout['rise']!=0:
+                        raise ValueError(f'{ident}: rotated/skewed/scaled or raised native text unsupported')
+                    if layout['render_mode']!=0 or layout['color_space'] not in ('DeviceRGB','DeviceGray','DeviceCMYK'):
+                        raise ValueError(f'{ident}: unsupported native rendering mode/color space')
+                    font = _choose_font(layout['font'], entry.get('zh'), fallback)
+                    _check_fit(entry.get('zh'), layout, font, ident, synthesized_styles=font==fallback)
+            except (KeyError, TypeError, ValueError, RuntimeError) as error:
+                findings.append({'page':number,'id':ident,'error':str(error)})
+        for index, note in enumerate(response.get('notes', response.get('figure_notes', []))):
+            if note.get('status') == 'preserved' or note.get('zh') == note.get('source'):
+                continue
+            ident = note.get('id', f'p{number:04d}-figure-{index+1}')
+            layout = dict(note.get('layout') or {})
+            try:
+                background = layout.get('background_color')
+                if layout.get('background_verified') is not True or not _finite_numbers(background,3) or any(v<0 or v>1 for v in background):
+                    raise ValueError(f'{ident}: raster figure needs a verified solid background')
+                if 'origin' not in layout and _finite_numbers(layout.get('bbox'),4) and isinstance(layout.get('font_size'),(int,float)):
+                    layout['origin']=[layout['bbox'][0],layout['bbox'][1]+layout['font_size']]
+                _validate_layout(layout,ident,page['width'],page['height'])
+                _check_fit(note.get('zh'),layout,fallback,ident)
+                if layout['origin'][1]>layout['bbox'][3] or layout['origin'][1]-layout['font_size']<layout['bbox'][1]-.01:
+                    raise ValueError(f'{ident}: raster translation cannot fit vertical region')
+            except (KeyError, TypeError, ValueError, RuntimeError) as error:
+                findings.append({'page':number,'id':ident,'error':str(error)})
+    return findings
+
+
+def render_translated(original_pdf, manifest, results, output_pdf, font_path, page_numbers=None):
     """Create Chinese pages or raise ValueError before writing on any unsafe item.
 
     Native source glyph operators are replaced by numeric TJ advances. The
@@ -209,15 +275,18 @@ def render_translated(original_pdf, manifest, results, output_pdf, font_path):
     if Path(original_pdf).resolve() == Path(output_pdf).resolve():
         raise ValueError('Output must not overwrite original PDF')
     actual_pages = extract_pages(original_pdf, backend=manifest.get('text_backend','auto'))
+    selected = set(page_numbers) if page_numbers is not None else {p['page'] for p in manifest.get('pages', [])}
+    if not selected or not selected <= {p['page'] for p in manifest.get('pages', [])}:
+        raise ValueError('Requested translation pages are empty or out of range')
     if any(p.get('backend') == 'mupdf' for p in actual_pages):
-        return _render_mupdf(original_pdf, manifest, results, output_pdf, font_path, actual_pages)
+        return _render_mupdf(original_pdf, manifest, results, output_pdf, font_path, actual_pages, selected)
     pages = manifest.get('pages', [])
     if len(pages) != len(actual_pages):
         raise ValueError('Manifest page count differs from original PDF')
     reader = PdfReader(str(original_pdf))
     writer = PdfWriter()
     fallback = _font(font_path)
-    report = {'pages': len(pages), 'translated_items': 0, 'preserved_items': 0,
+    report = {'pages': len(selected), 'translated_items': 0, 'preserved_items': 0,
               'font_substitutions': [], 'raster_replacements': [], 'unreadable_items': [],
               'method': 'native text-show strings replaced by position-preserving numeric TJ; original graphics reused',
               'limitations': ['Replacement glyphs are appended in an overlay; review stacking against overlapping source artwork.', 'Embedded subset fonts are not reconstructed; available standard fonts or the specified CJK font are used.']}
@@ -229,6 +298,8 @@ def render_translated(original_pdf, manifest, results, output_pdf, font_path):
             raise ValueError(f'Page {n}: manifest source content changed; re-prepare')
         if len(expected.get('items', [])) != len(actual['items']):
             raise ValueError(f'Page {n}: native item coverage differs from source')
+        if n not in selected:
+            continue
         responses = results.get(n, results.get(str(n), {}))
         translated = responses.get('items', [])
         by_id = {item.get('id'): item for item in translated}
@@ -399,15 +470,16 @@ def extract_pages(pdf_path, backend="auto"):
         return _extract_mupdf(pdf_path)
 
 
-def _render_mupdf(original_pdf, manifest, results, output_pdf, font_path, actual_pages):
+def _render_mupdf(original_pdf, manifest, results, output_pdf, font_path, actual_pages, selected_pages=None):
     fitz = _mupdf()
     expected_pages = manifest.get('pages',[])
+    selected_pages = set(selected_pages) if selected_pages is not None else {p['page'] for p in expected_pages}
     if len(expected_pages) != len(actual_pages):
         raise ValueError('Manifest page count differs from original PDF')
     if not Path(font_path).is_file():
         raise ValueError(f'Chinese fallback font does not exist: {font_path}')
     fallback = fitz.Font(fontfile=str(font_path))
-    report = {'pages':len(actual_pages), 'translated_items':0,'preserved_items':0,
+    report = {'pages':len(selected_pages), 'translated_items':0,'preserved_items':0,
               'font_substitutions':[],'raster_replacements':[],'unreadable_items':[],
               'method':'PyMuPDF rotation normalization and native TEXT ONLY redaction (images=0, graphics=0, fill=False)',
               'limitations':['Replacements are appended over original artwork; inspect stacking and nearby annotations.', 'Raster regions use verified solid backgrounds or explicitly authorized local background covers; image text fonts are estimated.']}
@@ -420,6 +492,8 @@ def _render_mupdf(original_pdf, manifest, results, output_pdf, font_path, actual
                     raise ValueError(f'Page {n}: manifest source/layout {key} changed; re-prepare')
             if len(expected.get('items',[])) != len(actual['items']):
                 raise ValueError(f'Page {n}: native item coverage differs from source')
+            if n not in selected_pages:
+                continue
             responses=results.get(n,results.get(str(n),{}))
             items=responses.get('items',[])
             by_id={i.get('id'):i for i in items}
@@ -529,6 +603,7 @@ def _render_mupdf(original_pdf, manifest, results, output_pdf, font_path, actual
                 page.insert_text(fitz.Point(layout['origin']),zh,fontname=name,fontsize=layout['font_size'],color=layout['color'],rotate=layout.get('rotation',0))
                 report['raster_replacements'].append({'id':ident,'page':n,'bbox':layout['bbox'],'approximation':('User-authorized local background cover; font metrics estimated' if layout.get('background_change_authorized') else 'Human-verified solid background cover; font metrics estimated')})
         destination=Path(output_pdf);destination.parent.mkdir(parents=True,exist_ok=True)
+        document.select(sorted(n-1 for n in selected_pages))
         document.save(str(destination),garbage=3,deflate=True)
     return report
 
